@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Virtual Mixer
+Comment=Soundboard with virtual audio routing
+Exec=VirtualMixer
+Icon=VirtualMixer
+Terminal=false
+Categories=AudioVideo;Audio;
