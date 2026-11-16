@@ -104,7 +104,8 @@ this does not imply support for every Linux distribution. Architecture follows t
 build host; the included CI configuration targets x86-64.
 
 `.github/workflows/build.yml` builds all three systems on pushes, pull requests, or manual triggers, and retains packages as GitHub Actions artifacts. Copy this
-project into a GitHub repository first. It does not publish a release automatically.
+project into a GitHub repository first. Pushing a `v*` tag publishes the Windows
+executable and ZIP as a GitHub release after all builds pass.
 
 These build recipes have not yet produced or validated native Windows/Linux/macOS binaries.
 No such binaries are included in this source folder. Test audio reception on each
@@ -117,8 +118,8 @@ Target repository: https://github.com/s1kluc/DontAbuseSounds
 The **Desktop builds** workflow runs on pushes and pull requests, and can also be
 started with **Actions → Desktop builds → Run workflow** after it is on the default
 branch. It builds Windows, Ubuntu 22.04 and macOS 15 using native runners. Download
-completed packages from the workflow run's **Artifacts** section. No release is
-published automatically. Each artifact name includes the runner architecture;
+completed packages from the workflow run's **Artifacts** section. Push a `v*` tag
+to publish a Windows release automatically. Each artifact name includes the runner architecture;
 binaries support that architecture, not every CPU type.
 
 macOS produces a ZIP containing `VirtualMixer.app` with the supplied photo icon.
