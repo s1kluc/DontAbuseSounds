@@ -70,8 +70,7 @@ class AudioCore:
     def play(self, pad_id, path):
         import numpy as np
         import soundfile as sf
-        from scipy.signal import resample_poly
-        from math import gcd
+        import soxr
         if self.output is None:
             raise ValueError('Select an available output device first.')
         device = self.output
@@ -92,8 +91,7 @@ class AudioCore:
         elif data.shape[1] == 1:
             data = np.repeat(data, 2, axis=1)
         if rate != device.rate:
-            factor = gcd(rate, device.rate)
-            data = resample_poly(data, device.rate // factor, rate // factor).astype('float32')
+            data = soxr.resample(data, rate, device.rate)
         if self.stream is None:
             stream = self.adapter.stream(device, channels, self.render)
             try:

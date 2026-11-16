@@ -24,6 +24,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libportaudio2 libsndfile1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0
       - run: python -m pip install -e ".[build]"
       - run: python -m unittest discover -s tests -v
+      - name: Import Windows signing certificate when configured
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERTIFICATE_BASE64) {
+            Write-Warning 'No signing certificate configured. Building an unsigned Windows test package.'
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            $password = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            $signer = @($cert | Where-Object HasPrivateKey)
+            if ($signer.Count -ne 1) { throw 'Expected exactly one signing certificate with a private key.' }
+            "WINDOWS_CERTIFICATE_THUMBPRINT=$($signer[0].Thumbprint)" >> $env:GITHUB_ENV
+          } finally {
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+          }
       - run: python scripts/build.py
       - uses: actions/upload-artifact@v4
         with:
@@ -48,7 +70,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          unzip -j dist/*.zip '*.exe' -d dist
-          gh release create "$GITHUB_REF_NAME" dist/*.exe dist/*.zip \
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
             --target "$GITHUB_SHA" --title "Virtual Mixer $GITHUB_REF_NAME" \
-            --notes "Windows x64 standalone soundboard. Download VirtualMixer.exe or extract the ZIP package. Python is not required. The executable is unsigned. Virtual audio routing requires a separately installed driver such as VB-CABLE. Audio routing on real Windows hardware has not been verified."
+            --notes "Windows x64 soundboard. Extract the entire ZIP and run VirtualMixer/VirtualMixer.exe; keep the _internal folder beside it. Python is not required. Packages are signed only when a signing certificate is configured in the build. Virtual audio routing requires a separately installed driver such as VB-CABLE. Audio routing on real Windows hardware has not been verified."

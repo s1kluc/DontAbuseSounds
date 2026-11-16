@@ -1,11 +1,35 @@
 """Run with the project environment on the target OS: python scripts/build.py."""
 from pathlib import Path
+import os
 import platform
 import shutil
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def sign_windows(directory):
+    thumbprint = os.environ.get('WINDOWS_CERTIFICATE_THUMBPRINT')
+    if not thumbprint:
+        print('WARNING: Windows package is unsigned; application control may block native modules.')
+        return
+    signtool = shutil.which('signtool')
+    if not signtool:
+        sdk = Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')) / 'Windows Kits/10/bin'
+        signtool = next(iter(sorted(sdk.glob('*/x64/signtool.exe'), reverse=True)), None)
+    if not signtool:
+        raise SystemExit('Install the Windows SDK (signtool.exe) to sign the Windows package.')
+    for path in sorted(directory.rglob('*')):
+        if not path.is_file() or path.suffix.lower() not in ('.exe', '.dll', '.pyd'):
+            continue
+        # Preserve trusted vendor signatures; sign every remaining native binary.
+        verified = subprocess.run([str(signtool), 'verify', '/pa', str(path)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if verified.returncode:
+            subprocess.run([str(signtool), 'sign', '/sha1', thumbprint, '/fd', 'SHA256',
+                            '/tr', 'http://timestamp.digicert.com', '/td', 'SHA256', str(path)], check=True)
+        subprocess.run([str(signtool), 'verify', '/pa', str(path)], check=True)
 
 
 def main():
@@ -19,7 +43,8 @@ def main():
     with Image.open(icon) as image:
         image.save(ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
-               '--onefile', '--windowed', '--name', 'VirtualMixer',
+               '--onedir' if sys.platform == 'win32' else '--onefile',
+               '--windowed', '--name', 'VirtualMixer', '--noupx',
                '--paths', str(ROOT), '--collect-data', 'virtual_mixer',
                '--collect-all', '_sounddevice_data', '--collect-all', '_soundfile_data']
     if sys.platform == 'win32':
@@ -41,7 +66,6 @@ def main():
     subprocess.run(command, cwd=ROOT, check=True)
     suffix = '.exe' if sys.platform == 'win32' else ''
     package = output / f'VirtualMixer-{sys.platform}-{platform.machine()}'
-    package.mkdir(exist_ok=True)
     if sys.platform == 'darwin':
         # ditto preserves the app bundle's symlinks and executable permissions.
         archive = output / f'{package.name}.zip'
@@ -49,7 +73,13 @@ def main():
                         str(output / 'VirtualMixer.app'), str(archive)], check=True)
         print(f'Build created: {archive}')
         return
-    shutil.copy2(output / f'VirtualMixer{suffix}', package)
+    if sys.platform == 'win32':
+        windows_archive = package
+        package = output / 'VirtualMixer'
+        sign_windows(package)
+    else:
+        package.mkdir(exist_ok=True)
+        shutil.copy2(output / f'VirtualMixer{suffix}', package)
     shutil.copy2(icon, package / 'VirtualMixer.png')
     shutil.copy2(ROOT / 'README.md', package)
     if sys.platform == 'linux':
@@ -58,7 +88,7 @@ def main():
         (package / 'install-desktop.sh').chmod(0o755)
         shutil.make_archive(str(package), 'gztar', root_dir=output, base_dir=package.name)
     else:
-        shutil.make_archive(str(package), 'zip', root_dir=output, base_dir=package.name)
+        shutil.make_archive(str(windows_archive), 'zip', root_dir=output, base_dir=package.name)
     print(f'Build created in {package}')
 
 

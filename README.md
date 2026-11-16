@@ -69,7 +69,7 @@ Before releasing on **each** platform, manually:
 5. Try unsupported audio, missing assets, missing virtual devices and corrupt JSON.
 
 Hardware reception, macOS GUI execution and Windows/Linux parity have not been
-verified in this environment. Signed app bundles/installers are not included.
+verified in this environment. Windows signing requires the certificate setup below.
 The source is an MVP implementation, not a hardware-certified release.
 
 API references: [sounddevice](https://python-sounddevice.readthedocs.io/),
@@ -89,9 +89,10 @@ python scripts/build.py
 
 On Ubuntu, first install `libportaudio2 libsndfile1 libegl1 libxkbcommon-x11-0
 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0` using apt.
-The build produces a standalone executable including Python, Qt and audio modules:
+The build includes Python, Qt and audio modules:
 
-- Windows: `dist/VirtualMixer.exe`, plus a ZIP package in `dist/`.
+- Windows: `dist/VirtualMixer/VirtualMixer.exe`, plus a ZIP package in `dist/`.
+  Extract the entire ZIP and keep the `_internal` folder beside the executable.
 - Linux: `dist/VirtualMixer`, plus a tar.gz package in `dist/`. After extraction,
   run `./VirtualMixer`; optionally run `./install-desktop.sh` to install the app and
   photo icon into your user application menu. Linux ELF executables do not embed a
@@ -105,12 +106,36 @@ build host; the included CI configuration targets x86-64.
 
 `.github/workflows/build.yml` builds all three systems on pushes, pull requests, or manual triggers, and retains packages as GitHub Actions artifacts. Copy this
 project into a GitHub repository first. Pushing a `v*` tag publishes the Windows
-executable and ZIP as a GitHub release after the Windows build passes. Branch
+ZIP as a GitHub release after the Windows build passes. Branch
 builds continue to check all three platforms.
 
 These build recipes have not yet produced or validated native Windows/Linux/macOS binaries.
 No such binaries are included in this source folder. Test audio reception on each
-OS using the checklist above before distribution. Windows executables are unsigned.
+OS using the checklist above before distribution. Windows packages are unsigned
+unless signing is configured below.
+
+### Windows signing
+
+SoXR replaces SciPy for sample-rate conversion, removing the SciPy import that
+loaded the blocked `_pocketfft_umath` module in issue #1. Other native modules
+can still be blocked by Windows application control when unsigned or untrusted.
+
+For local signing, install the Windows SDK and a trusted RSA code-signing
+certificate with its private key in `CurrentUser\My`. Set the environment variable
+`WINDOWS_CERTIFICATE_THUMBPRINT` to its thumbprint before running `scripts/build.py`.
+The build preserves valid vendor signatures and signs remaining EXE, DLL and PYD
+files with SHA-256 and an RFC 3161 timestamp. It verifies every native binary before
+creating the ZIP; signing or verification failures stop the build.
+
+For GitHub Actions, configure repository secrets `WINDOWS_CERTIFICATE_BASE64`
+(base64-encoded PFX containing the certificate and private key) and
+`WINDOWS_CERTIFICATE_PASSWORD`. Use a certificate issued by a trusted CA; a
+self-signed certificate does not establish public trust. PFX import is supported
+only if your certificate provider permits export of the signing key; hardware or
+cloud-backed keys require that provider's signing integration instead.
+Without these secrets, CI explicitly builds an unsigned test package. Pull requests
+never import the certificate. Test with Windows application control enabled;
+signing cannot override an organization's explicit deny policies.
 
 ## GitHub builds for DontAbuseSounds
 
@@ -125,8 +150,8 @@ binaries support that architecture, not every CPU type.
 
 macOS produces a ZIP containing `VirtualMixer.app` with the supplied photo icon.
 The app is unsigned and not notarized; Gatekeeper may block opening it until the
-user allows it in System Settings → Privacy & Security. Windows builds are also
-unsigned. Signing requires credentials and is not configured by these builds.
+user allows it in System Settings → Privacy & Security. Windows builds use the
+optional signing configuration above and are otherwise unsigned.
 
 You can also run `python scripts/build.py` locally on macOS after installing the
 `build` extra. Native Windows/Linux/macOS build results still need verification;

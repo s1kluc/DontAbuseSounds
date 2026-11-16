@@ -1,10 +1,38 @@
 import json
 import tempfile
 import unittest
-from virtual_mixer.core import AudioCore, PortAudioAdapter, Project
+from virtual_mixer.core import AudioCore, Device, PortAudioAdapter, Project
 
 
 class CoreTests(unittest.TestCase):
+    def test_play_resamples_audio_for_output(self):
+        import numpy as np
+        import soundfile as sf
+
+        class Stream:
+            def start(self): pass
+        class Adapter:
+            def stream(self, device, channels, callback): return Stream()
+
+        for source_rate, target_rate, source_channels, output_channels in (
+                (44100, 48000, 1, 2), (48000, 44100, 2, 1), (48000, 48000, 2, 2)):
+            with self.subTest(source_rate=source_rate, target_rate=target_rate), tempfile.TemporaryDirectory() as root:
+                signal = .25 * np.sin(2 * np.pi * 440 * np.arange(source_rate // 10) / source_rate)
+                source = np.repeat(signal[:, None], source_channels, axis=1)
+                path = root + '/tone.wav'
+                sf.write(path, source, source_rate, subtype='FLOAT')
+                core = AudioCore(Adapter())
+                core.select_output(Device('test', 0, 'Test', 0, output_channels, target_rate, False))
+                core.play(0, path)
+                data, position = core.voices[0]
+                self.assertEqual(data.shape, (target_rate // 10, output_channels))
+                self.assertEqual(data.dtype, np.float32)
+                self.assertEqual(position, 0)
+                expected = .25 * np.sin(2 * np.pi * 440 * np.arange(len(data)) / target_rate)
+                np.testing.assert_allclose(data[100:-100, 0], expected[100:-100], atol=1e-4)
+                if output_channels == 2:
+                    np.testing.assert_array_equal(data[:, 0], data[:, 1])
+
     def test_ids_survive_reordered_devices(self):
         for host in ('CoreAudio', 'WASAPI', 'ALSA'):
             class Backend:
