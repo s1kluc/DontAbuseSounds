@@ -105,7 +105,8 @@ build host; the included CI configuration targets x86-64.
 
 `.github/workflows/build.yml` builds all three systems on pushes, pull requests, or manual triggers, and retains packages as GitHub Actions artifacts. Copy this
 project into a GitHub repository first. Pushing a `v*` tag publishes the Windows
-executable and ZIP as a GitHub release after all builds pass.
+executable and ZIP as a GitHub release after the Windows build passes. Branch
+builds continue to check all three platforms.
 
 These build recipes have not yet produced or validated native Windows/Linux/macOS binaries.
 No such binaries are included in this source folder. Test audio reception on each
