@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(startsWith(github.ref, 'refs/tags/v') && '["windows-latest"]' || '["windows-latest", "ubuntu-22.04", "macos-15"]') }}
+        os: ${{ fromJSON(startsWith(github.ref, 'refs/tags/v') && '["windows-latest", "macos-15"]' || '["windows-latest", "ubuntu-22.04", "macos-15"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +53,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*.tar.gz
+            dist/*.dmg
           if-no-files-found: error
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -63,13 +64,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: VirtualMixer-Windows-X64
+          pattern: VirtualMixer-*
+          merge-multiple: true
           path: dist
-      - name: Publish Windows release
+      - name: Publish Windows and macOS release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.dmg \
             --target "$GITHUB_SHA" --title "Virtual Mixer $GITHUB_REF_NAME" \
-            --notes "Windows x64 soundboard. Extract the entire ZIP and run VirtualMixer/VirtualMixer.exe; keep the _internal folder beside it. Python is not required. Packages are signed only when a signing certificate is configured in the build. Virtual audio routing requires a separately installed driver such as VB-CABLE. Audio routing on real Windows hardware has not been verified."
+            --notes "Windows: extract the entire ZIP and run VirtualMixer/VirtualMixer.exe; keep the _internal folder beside it. macOS: open the DMG and drag VirtualMixer.app to Applications. The architecture is included in each filename. Python is not required. macOS builds are not Developer ID signed or notarized; Gatekeeper may block opening until allowed in System Settings > Privacy & Security. Windows packages are signed only when a signing certificate is configured. Virtual audio routing requires a separately installed driver such as BlackHole on macOS or VB-CABLE on Windows. Audio routing on real hardware has not been verified."

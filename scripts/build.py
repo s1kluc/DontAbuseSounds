@@ -5,8 +5,20 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def create_macos_dmg(app, destination):
+    with tempfile.TemporaryDirectory() as staging:
+        staging = Path(staging)
+        subprocess.run(['ditto', str(app), str(staging / app.name)], check=True)
+        (staging / 'Applications').symlink_to('/Applications')
+        subprocess.run(['hdiutil', 'create', '-volname', 'Virtual Mixer',
+                        '-srcfolder', str(staging), '-format', 'UDZO', '-fs', 'HFS+',
+                        '-ov', str(destination)], check=True)
+    subprocess.run(['hdiutil', 'verify', str(destination)], check=True)
 
 
 def sign_windows(directory):
@@ -71,7 +83,9 @@ def main():
         archive = output / f'{package.name}.zip'
         subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent',
                         str(output / 'VirtualMixer.app'), str(archive)], check=True)
-        print(f'Build created: {archive}')
+        dmg = output / f'{package.name}.dmg'
+        create_macos_dmg(output / 'VirtualMixer.app', dmg)
+        print(f'Build created: {archive} and {dmg}')
         return
     if sys.platform == 'win32':
         windows_archive = package

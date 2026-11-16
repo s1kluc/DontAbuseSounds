@@ -106,7 +106,7 @@ build host; the included CI configuration targets x86-64.
 
 `.github/workflows/build.yml` builds all three systems on pushes, pull requests, or manual triggers, and retains packages as GitHub Actions artifacts. Copy this
 project into a GitHub repository first. Pushing a `v*` tag publishes the Windows
-ZIP as a GitHub release after the Windows build passes. Branch
+ZIP and macOS ZIP/DMG as a GitHub release after both builds pass. Branch
 builds continue to check all three platforms.
 
 These build recipes have not yet produced or validated native Windows/Linux/macOS binaries.
@@ -145,10 +145,13 @@ The **Desktop builds** workflow runs on pushes and pull requests, and can also b
 started with **Actions → Desktop builds → Run workflow** after it is on the default
 branch. It builds Windows, Ubuntu 22.04 and macOS 15 using native runners. Download
 completed packages from the workflow run's **Artifacts** section. Push a `v*` tag
-to publish a Windows release automatically. Each artifact name includes the runner architecture;
+to publish a Windows and macOS release automatically. Each artifact name includes the runner architecture;
 binaries support that architecture, not every CPU type.
 
-macOS produces a ZIP containing `VirtualMixer.app` with the supplied photo icon.
+macOS produces a ZIP and a DMG containing `VirtualMixer.app` with the supplied photo icon.
+Open the DMG and drag the app to the Applications link to install it. The filename
+includes the build architecture; the app is not a universal Intel/Apple Silicon binary.
+The build verifies the DMG checksum before uploading it.
 The app is unsigned and not notarized; Gatekeeper may block opening it until the
 user allows it in System Settings → Privacy & Security. Windows builds use the
 optional signing configuration above and are otherwise unsigned.
