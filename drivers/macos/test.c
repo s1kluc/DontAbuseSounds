@@ -18,6 +18,11 @@ int main(void) {
             kAudioServerPlugInIOOperationReadInput, frames, &cycle, input, NULL) == 0);
         assert(memcmp(input, output, sizeof(input)) == 0);
     }
+    atomic_store(&gMute_Input_Master_Value, true);
+    assert(NullAudio_DoIOOperation(driver, kObjectID_Device, kObjectID_Stream_Input, 1,
+        kAudioServerPlugInIOOperationReadInput, frames, &cycle, input, NULL) == 0);
+    for (UInt32 i = 0; i < 4; ++i) assert(input[i] == 0);
+    atomic_store(&gMute_Input_Master_Value, false);
     cycle.mInputTime.mSampleTime += kLoopbackFrames;
     assert(NullAudio_DoIOOperation(driver, kObjectID_Device, kObjectID_Stream_Input, 1,
         kAudioServerPlugInIOOperationReadInput, frames, &cycle, input, NULL) == 0);

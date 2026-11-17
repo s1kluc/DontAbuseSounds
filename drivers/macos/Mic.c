@@ -20,6 +20,7 @@ A minimal user-space driver.
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/syslog.h>
+#include <stdatomic.h>
 
 //==================================================================================================
 #pragma mark -
@@ -157,12 +158,12 @@ static bool									gStream_Input_IsActive			= true;
 static bool									gStream_Output_IsActive			= true;
 
 static const Float32						kVolume_MinDB					= -96.0;
-static const Float32						kVolume_MaxDB					= 6.0;
-static Float32								gVolume_Input_Master_Value		= 0.0;
-static Float32								gVolume_Output_Master_Value		= 0.0;
+static const Float32						kVolume_MaxDB					= 0.0;
+static _Atomic(Float32)								gVolume_Input_Master_Value		= 1.0;
+static _Atomic(Float32)								gVolume_Output_Master_Value		= 1.0;
 
-static bool									gMute_Input_Master_Value		= false;
-static bool									gMute_Output_Master_Value		= false;
+static atomic_bool									gMute_Input_Master_Value		= false;
+static atomic_bool									gMute_Output_Master_Value		= false;
 
 static const UInt32							kDataSource_NumberItems			= 4;
 #define										kDataSource_ItemNamePattern		"Data Source Item %d"
@@ -4182,10 +4183,15 @@ Done:
 	return theAnswer;
 }
 
+static Float32 LoopbackGain(Float32 scalar, bool muted)
+{
+    if (muted || !(scalar > 0.0f)) return 0.0f;
+    return powf(10.0f, (kVolume_MinDB + scalar * scalar * (kVolume_MaxDB - kVolume_MinDB)) / 20.0f);
+}
+
 static OSStatus	NullAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver, AudioObjectID inDeviceObjectID, AudioObjectID inStreamObjectID, UInt32 inClientID, UInt32 inOperationID, UInt32 inIOBufferFrameSize, const AudioServerPlugInIOCycleInfo* inIOCycleInfo, void* ioMainBuffer, void* ioSecondaryBuffer)
 {
-	//	This is called to actuall perform a given operation. For this device, all we need to do is
-	//	clear the buffer for the ReadInput operation.
+	//	Route the mixed output to the capture stream on the device clock.
 
 	#pragma unused(inClientID, ioSecondaryBuffer)
 
@@ -4200,20 +4206,24 @@ static OSStatus	NullAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
 	if (inOperationID == kAudioServerPlugInIOOperationReadInput) {
         Float32* samples = ioMainBuffer;
         memset(samples, 0, inIOBufferFrameSize * 2 * sizeof(Float32));
-        if (pthread_mutex_trylock(&gLoopbackLock) == 0) {
+        const Float32 gain = LoopbackGain(atomic_load_explicit(&gVolume_Input_Master_Value, memory_order_relaxed),
+                                          atomic_load_explicit(&gMute_Input_Master_Value, memory_order_relaxed));
+        if (gain && pthread_mutex_trylock(&gLoopbackLock) == 0) {
             SInt64 first = (SInt64)inIOCycleInfo->mInputTime.mSampleTime - kLoopbackDelay;
             for (UInt32 i = 0; i < inIOBufferFrameSize; ++i) {
                 SInt64 frame = first + i;
                 if (frame < 0) continue;
                 UInt32 slot = (UInt32)frame % kLoopbackFrames;
                 if (gLoopback[slot].tag == frame + 1) {
-                    samples[2 * i] = gLoopback[slot].stereo[0];
-                    samples[2 * i + 1] = gLoopback[slot].stereo[1];
+                    samples[2 * i] = gain * gLoopback[slot].stereo[0];
+                    samples[2 * i + 1] = gain * gLoopback[slot].stereo[1];
                 }
             }
             pthread_mutex_unlock(&gLoopbackLock);
         }
     } else if (inOperationID == kAudioServerPlugInIOOperationWriteMix) {
+        const Float32 gain = LoopbackGain(atomic_load_explicit(&gVolume_Output_Master_Value, memory_order_relaxed),
+                                          atomic_load_explicit(&gMute_Output_Master_Value, memory_order_relaxed));
         if (pthread_mutex_trylock(&gLoopbackLock) == 0) {
             const Float32* samples = ioMainBuffer;
             SInt64 first = (SInt64)inIOCycleInfo->mOutputTime.mSampleTime;
@@ -4222,8 +4232,8 @@ static OSStatus	NullAudio_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
                 if (frame < 0) continue;
                 UInt32 slot = (UInt32)frame % kLoopbackFrames;
                 gLoopback[slot].tag = frame + 1;
-                gLoopback[slot].stereo[0] = samples[2 * i];
-                gLoopback[slot].stereo[1] = samples[2 * i + 1];
+                gLoopback[slot].stereo[0] = gain ? gain * samples[2 * i] : 0.0f;
+                gLoopback[slot].stereo[1] = gain ? gain * samples[2 * i + 1] : 0.0f;
             }
             pthread_mutex_unlock(&gLoopbackLock);
         }
