@@ -9,7 +9,7 @@ use ringbuf::{
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, AtomicU16, Ordering::Relaxed},
-    mpsc::{self, SyncSender},
+    mpsc::{self, Receiver, SyncSender},
     Arc,
 };
 
@@ -104,23 +104,14 @@ impl Engine {
         };
         let (tx, rx) = mpsc::sync_channel(32);
         let status = Arc::new(AtomicU16::new(0));
-        let mut voice = tap;
-        let mut mixer = Mixer::default();
-        let playing = status.clone();
-        let fault = failure.clone();
-        let render = move || -> Frame {
-            // Commands are bounded and decoded samples arrive from outside the audio thread.
-            for cmd in rx.try_iter().take(32) {
-                mixer.command(cmd);
-            }
-            if fault.load(Relaxed) {
-                return [0.0; 2];
-            }
-            let frame = mixer.next(voice.as_mut().map_or(0.0, |read| read()));
-            playing.store(mixer.playing(), Relaxed);
-            frame
+        let writer = Output {
+            commands: rx,
+            voice: tap,
+            mixer: Mixer::default(),
+            status: status.clone(),
+            failure: failure.clone(),
         };
-        let output_stream = output_stream(&output_dev, output_cfg, render, failure.clone())?;
+        let output_stream = output_stream(&output_dev, output_cfg, writer)?;
         if let Some(stream) = &input_stream {
             stream.play().map_err(|e| e.to_string())?;
         }
@@ -264,35 +255,51 @@ where
     .map_err(|e| e.to_string())
 }
 
+struct Output {
+    commands: Receiver<PadCommand>,
+    voice: Option<InputTap>,
+    mixer: Mixer,
+    status: Arc<AtomicU16>,
+    failure: Arc<AtomicBool>,
+}
+
 fn output_stream(
     dev: &Device,
     cfg: SupportedStreamConfig,
-    render: impl FnMut() -> Frame + Send + 'static,
-    fail: Arc<AtomicBool>,
+    output: Output,
 ) -> Result<Stream, String> {
     match cfg.sample_format() {
-        SampleFormat::F32 => playback::<f32>(dev, &cfg, render, fail),
-        SampleFormat::I16 => playback::<i16>(dev, &cfg, render, fail),
-        SampleFormat::I32 => playback::<i32>(dev, &cfg, render, fail),
-        SampleFormat::U16 => playback::<u16>(dev, &cfg, render, fail),
+        SampleFormat::F32 => playback::<f32>(dev, &cfg, output),
+        SampleFormat::I16 => playback::<i16>(dev, &cfg, output),
+        SampleFormat::I32 => playback::<i32>(dev, &cfg, output),
+        SampleFormat::U16 => playback::<u16>(dev, &cfg, output),
         other => Err(format!("Unsupported output sample format: {other}")),
     }
 }
+
 fn playback<T>(
     dev: &Device,
     cfg: &SupportedStreamConfig,
-    mut render: impl FnMut() -> Frame + Send + 'static,
-    fail: Arc<AtomicBool>,
+    mut output: Output,
 ) -> Result<Stream, String>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = cfg.channels() as usize;
+    let fail = output.failure.clone();
     dev.build_output_stream(
         &cfg.config(),
         move |data: &mut [T], _| {
+            if output.failure.load(Relaxed) {
+                data.fill(T::from_sample(0.0));
+                return;
+            }
+            for cmd in output.commands.try_iter().take(32) {
+                output.mixer.command(cmd);
+            }
             for f in data.chunks_exact_mut(channels) {
-                let [l, r] = render();
+                let mic = output.voice.as_mut().map_or(0.0, |read| read());
+                let [l, r] = output.mixer.next(mic);
                 if channels == 1 {
                     f[0] = T::from_sample((l + r) * 0.5);
                 } else {
@@ -301,6 +308,7 @@ where
                     f[2..].fill(T::from_sample(0.0));
                 }
             }
+            output.status.store(output.mixer.playing(), Relaxed);
         },
         move |_| fail.store(true, Relaxed),
         None,

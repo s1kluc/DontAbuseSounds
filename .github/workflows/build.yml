@@ -77,6 +77,10 @@ jobs:
           rustup update stable --no-self-update
           rustup target add --toolchain stable aarch64-apple-darwin x86_64-apple-darwin
           cargo +stable test --locked
+      - name: Test HAL audio loopback
+        run: |
+          xcrun clang -std=gnu11 -O2 -framework CoreFoundation -framework CoreAudio drivers/macos/test.c -o "$RUNNER_TEMP/hal-test"
+          "$RUNNER_TEMP/hal-test"
       - name: Load Apple signing certificates
         if: github.ref_type == 'tag'
         env:

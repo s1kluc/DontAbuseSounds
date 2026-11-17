@@ -13,6 +13,7 @@ struct Desktop {
     project: Project,
     engine: Option<Engine>,
     generation: u64,
+    pad_revisions: [u64; PADS],
 }
 type App<'a> = State<'a, Mutex<Desktop>>;
 
@@ -97,13 +98,18 @@ async fn import_project(handle: tauri::AppHandle, path: PathBuf) -> Result<Setti
 
 #[tauri::command]
 async fn play_pad(app: App<'_>, pad: usize) -> Result<(), String> {
-    let (path, rate, generation) = {
+    let (path, rate, generation, revision) = {
         let app = app.lock().unwrap();
         let engine = app
             .engine
             .as_ref()
             .ok_or("Select an output and start audio first")?;
-        (app.project.path(pad)?, engine.rate, app.generation)
+        (
+            app.project.path(pad)?,
+            engine.rate,
+            app.generation,
+            app.pad_revisions[pad],
+        )
     };
     let samples = tauri::async_runtime::spawn_blocking(move || {
         let (frames, input_rate) = clip::decode(&path)?;
@@ -112,7 +118,7 @@ async fn play_pad(app: App<'_>, pad: usize) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())??;
     let app = app.lock().unwrap();
-    if generation != app.generation {
+    if generation != app.generation || revision != app.pad_revisions[pad] {
         return Err("Playback was cancelled".into());
     }
     app.engine
@@ -127,7 +133,11 @@ fn stop_pad(app: App<'_>, pad: Option<usize>) -> Result<(), String> {
     if pad.is_some_and(|i| i >= PADS) {
         return Err("Invalid pad".into());
     }
-    app.generation += 1;
+    if let Some(i) = pad {
+        app.pad_revisions[i] += 1;
+    } else {
+        app.generation += 1;
+    }
     if let Some(engine) = app.engine.as_ref() {
         engine.send(pad.map_or(PadCommand::StopAll, PadCommand::Stop))?;
     }
@@ -143,6 +153,7 @@ fn main() {
                 project: Project::open(root),
                 engine: None,
                 generation: 0,
+                pad_revisions: [0; PADS],
             }));
             Ok(())
         })

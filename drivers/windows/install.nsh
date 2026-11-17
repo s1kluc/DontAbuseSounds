@@ -11,6 +11,8 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  IfFileExists "$INSTDIR\driver\device.exe" 0 +2
-  ExecWait '"$INSTDIR\driver\device.exe" --remove' $0
+  ${If} $UpdateMode != 1
+    IfFileExists "$INSTDIR\driver\device.exe" 0 +2
+    ExecWait '"$INSTDIR\driver\device.exe" --remove' $0
+  ${EndIf}
 !macroend
