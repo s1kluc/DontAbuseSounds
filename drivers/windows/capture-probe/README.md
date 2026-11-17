@@ -2,10 +2,10 @@
 
 Windows 11 x64. This test build adds clips to the selected existing recording endpoint. Keep your normal hardware microphone selected in Discord.
 
-1. Extract the ZIP. In 64-bit Windows PowerShell, run `./CaptureSetup.ps1 -Action List` to check the detected recording devices.
-2. Using the same Windows account, open 64-bit PowerShell as administrator. Run `./CaptureSetup.ps1 -Action Install` and choose the microphone by number. Reboot Windows.
-3. Run the bundled DontAbuseSounds EXE. Under Soundboard output choose **Windows microphone (installed capture effect)**, then click **Start audio**. Assign a clip and trigger the pad. Keep the same hardware microphone selected in Discord.
-4. To detach the effect, close DontAbuseSounds, run `./CaptureSetup.ps1 -Action Remove` as administrator, select the same device, and reboot. The unused DLL and feed directory remain on disk. For a clean reinstall after detaching, remove the two test folders **DontAbuseSounds Capture Probe** in Program Files and **DontAbuseSounds Capture Feed** in ProgramData as administrator.
+1. Launch `DontAbuseSounds-Microphone-Test.exe`.
+2. Select your hardware microphone and click **Set up microphone routing**. Approve the Windows administrator prompt. Use the same Windows account to configure and run DontAbuseSounds.
+3. The app selects the installed capture output. Reopen Discord’s mic test with the same hardware microphone selected. If Windows asks for a restart, restart and open DontAbuseSounds again before testing. Assign and trigger a pad.
+4. For manual diagnostics and removal, `CaptureSetup.ps1 -Action List` enumerates endpoints and `CaptureSetup.ps1 -Action Remove` detaches the effect from the selected endpoint. Restart Windows after detaching.
 
 The test accepts one active endpoint at a time, clips up to one minute, and plays one pad at a time in the capture route. Local playback remains available through the other outputs. Capture attachment stops if the endpoint effects store is absent, read-only, disabled or already contains an endpoint effect. The preview never replaces an existing endpoint effect. Audio policy or driver behavior may prevent loading the unsigned DLL or bypass effects for an application's recording mode. Run the first test with Soundpad disabled for the selected endpoint.
 

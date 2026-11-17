@@ -5,6 +5,9 @@ const { open } = window.__TAURI__.dialog;
 const $ = (id) => document.getElementById(id);
 const input = $("input");
 const output = $("output");
+const setupMic = $("setup-mic");
+let setupAvailable = false;
+let captureInstalled = false;
 const captureId = "das:windows-capture";
 const start = $("start");
 const error = $("error");
@@ -65,6 +68,8 @@ function render() {
   input.disabled = switching || running || output.value === captureId;
   output.disabled = switching || running;
   $("refresh").disabled = switching || running;
+  setupMic.hidden = !setupAvailable || captureInstalled;
+  setupMic.disabled = switching || running || !input.value;
   $("import").disabled = readOnly || importing || running || !project || project.pads.some(Boolean);
   for (let i = 0; i < padButtons.length; i++) {
     const { play, assign } = padButtons[i];
@@ -96,7 +101,13 @@ async function scan(initial = false) {
       if (virtual) select.value = virtual.id;
     }
   }
-  $("guide").hidden = !outputs.some(dev => dev.virtual_mic);
+  captureInstalled = outputs.some(dev => dev.id === captureId);
+  $("guide").hidden = !outputs.some(dev => dev.virtual_mic) || output.value === captureId;
+  if (setupAvailable && !captureInstalled) {
+    $("status").textContent = "Choose your hardware microphone and click Set up microphone routing.";
+    render();
+    return;
+  }
   if ($("guide").hidden && !outputs.some(dev => dev.id === captureId)) {
     $("status").textContent = "Virtual microphone unavailable. Run the DontAbuseSounds installer to add it.";
   }
@@ -137,6 +148,28 @@ start.onclick = async () => {
   } catch (e) { showError(e); }
   finally { switching = false; render(); }
 };
+setupMic.onclick = async () => {
+  if (!input.value) return;
+  switching = true;
+  showError("");
+  $("status").textContent = "Waiting for Windows microphone setup…";
+  render();
+  try {
+    const restart = await invoke("setup_capture", { input: input.value });
+    await scan();
+    if (!captureInstalled) throw new Error("Windows configured the effect, but this account cannot use its audio feed.");
+    output.value = captureId;
+    await invoke("start_audio", { input: null, output: captureId });
+    playing = 0;
+    $("status").textContent = restart
+      ? "Restart Windows to load the microphone effect."
+      : "Microphone routing configured. Reopen Discord’s microphone test and try a pad.";
+  } catch (e) {
+    $("status").textContent = "Microphone setup did not finish.";
+    showError(e);
+  } finally { switching = false; render(); }
+};
+input.onchange = render;
 output.onchange = render;
 $("refresh").onclick = () => scan().catch(showError);
 $("stop").onclick = async () => {
@@ -154,11 +187,16 @@ $("import").onclick = async () => {
 };
 
 (async () => {
-  const state = await invoke("settings");
+  const [state, canSetUp] = await Promise.all([invoke("settings"), invoke("capture_setup_available")]);
+  setupAvailable = canSetUp;
   project = state.settings;
   readOnly = !!state.load_error;
   if (readOnly) showError("Project could not be loaded. Original preserved. " + state.load_error);
   render();
   await scan(true);
+  if (setupAvailable && captureInstalled && (!output.value || output.value === captureId)) {
+    output.value = captureId;
+    await start.onclick();
+  }
   setInterval(pollStatus, 150);
 })().catch(showError);

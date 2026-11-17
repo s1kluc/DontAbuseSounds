@@ -787,6 +787,7 @@ dependencies = [
 name = "dont-abuse-sounds"
 version = "0.2.0"
 dependencies = [
+ "base64 0.23.1",
  "cpal",
  "ringbuf",
  "rubato",
@@ -797,6 +798,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

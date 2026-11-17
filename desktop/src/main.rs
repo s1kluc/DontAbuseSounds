@@ -2,6 +2,8 @@
 mod audio;
 #[cfg(windows)]
 mod capture_feed;
+#[cfg(windows)]
+mod capture_setup;
 mod clip;
 mod project;
 
@@ -81,6 +83,33 @@ fn devices(input: bool) -> Result<Vec<audio::Endpoint>, String> {
         return Ok(devices);
     }
     Ok(devices)
+}
+
+#[tauri::command]
+fn capture_setup_available() -> bool {
+    #[cfg(windows)]
+    {
+        capture_setup::available()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
+async fn setup_capture(input: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || capture_setup::install(&input))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = input;
+        Err("Hardware microphone routing is available on Windows".into())
+    }
 }
 
 #[tauri::command]
@@ -191,6 +220,8 @@ fn stop_pad(app: App<'_>, pad: Option<usize>) -> Result<(), String> {
 }
 
 fn main() {
+    #[cfg(windows)]
+    capture_setup::run_setup_argument();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -206,6 +237,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             settings,
             devices,
+            capture_setup_available,
+            setup_capture,
             start_audio,
             stop_audio,
             audio_status,

@@ -1,4 +1,4 @@
-param([ValidateSet('List', 'Install', 'Remove')][string]$Action = 'List', [switch]$TestTone)
+param([ValidateSet('List', 'Install', 'Remove')][string]$Action = 'List', [switch]$TestTone, [string]$Endpoint, [switch]$EmbeddedDll)
 
 $ErrorActionPreference = 'Stop'
 if (![Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell.' }
@@ -14,6 +14,19 @@ $modes = [string[]]@('{C18E2F7E-933D-4965-B7D1-1EEF228D2AF3}', '{98951333-B9CD-4
 $hklm = [Microsoft.Win32.Registry]::LocalMachine
 $feed = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'DontAbuseSounds Capture Feed'
 
+if ($Endpoint) {
+    if ($Endpoint -notmatch '^\{[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\}$') {
+        throw 'Invalid Windows recording endpoint.'
+    }
+    $endpointKey = $hklm.OpenSubKey("$root\$Endpoint")
+    if (!$endpointKey) { throw 'Selected Windows recording endpoint is unavailable.' }
+    try {
+        if (($endpointKey.GetValue('DeviceState', 0) -band 1) -eq 0) {
+            throw 'Enable and reconnect the selected microphone.'
+        }
+    } finally { $endpointKey.Dispose() }
+    $device = [pscustomobject]@{ Name = 'selected microphone'; Path = "$root\$Endpoint\FxProperties" }
+} else {
 $devices = @(
     foreach ($dev in Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction SilentlyContinue) {
         if ($dev.Status -ne 'OK' -or $dev.InstanceId -notmatch '^SWD\\MMDEVAPI\\\{0\.0\.1\.00000000\}\.\{([0-9a-f-]{36})\}$') { continue }
@@ -41,15 +54,18 @@ for ($i = 0; $i -lt $devices.Count; $i++) {
 }
 if ($Action -eq 'List') { return }
 
+}
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run Install or Remove from an administrator PowerShell.'
 }
-$choice = 0
-if (![int]::TryParse((Read-Host 'Recording device number'), [ref]$choice) -or
-    $choice -lt 1 -or $choice -gt $devices.Count) { throw 'Invalid selection.' }
-$device = $devices[$choice - 1]
+if (!$Endpoint) {
+    $choice = 0
+    if (![int]::TryParse((Read-Host 'Recording device number'), [ref]$choice) -or
+        $choice -lt 1 -or $choice -gt $devices.Count) { throw 'Invalid selection.' }
+    $device = $devices[$choice - 1]
+}
 $key = $hklm.OpenSubKey($device.Path, $true)
 if (!$key) { throw 'Windows did not expose a writable effect store for this recording device.' }
 try {
@@ -70,7 +86,7 @@ try {
 
     # Never replace an existing effect or toggle Windows enhancements for the user.
     if (($key.GetValueNames() | Where-Object { $_ -in $reservedProperties }) -or
-        $key.GetValue($disableProperty, 0) -ne 0) { throw "Selected endpoint is unavailable for this test: $($device.State)." }
+        $key.GetValue($disableProperty, 0) -ne 0) { throw "Windows microphone routing requires enabled audio enhancements and an available endpoint effect slot." }
 
     $capture = $hklm.OpenSubKey($root)
     try {
@@ -86,8 +102,15 @@ try {
         }
     } finally { $capture.Dispose() }
 
-    $source = Join-Path $PSScriptRoot 'DontAbuseSoundsCaptureProbe.dll'
-    if (!(Test-Path -LiteralPath $source -PathType Leaf)) { throw 'Extract the whole test ZIP first.' }
+    $payload = if ($EmbeddedDll) {
+        $encoded = [Console]::In.ReadToEnd()
+        if (!$encoded -or $encoded.Length -gt 1500000) { throw 'Invalid embedded audio effect.' }
+        [Convert]::FromBase64String($encoded)
+    } else {
+        $source = Join-Path $PSScriptRoot 'DontAbuseSoundsCaptureProbe.dll'
+        [IO.File]::ReadAllBytes($source)
+    }
+    if ($payload.Length -lt 2 -or $payload[0] -ne 77 -or $payload[1] -ne 90) { throw 'Invalid audio effect DLL.' }
     $directory = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'DontAbuseSounds Capture Probe'
     if ((Test-Path -LiteralPath $directory) -and
         ((Get-Item -LiteralPath $directory).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
@@ -96,11 +119,14 @@ try {
     $null = New-Item -ItemType Directory -Path $directory -Force
     $dll = Join-Path $directory 'DontAbuseSoundsCaptureProbe.dll'
     if (Test-Path -LiteralPath $dll) {
-        if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $dll).Hash) {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $expected = [BitConverter]::ToString($sha.ComputeHash([byte[]]$payload)).Replace('-', '') }
+        finally { $sha.Dispose() }
+        if ($expected -ne (Get-FileHash -LiteralPath $dll).Hash) {
             throw 'A different probe build is already installed. Detach it and remove that build first.'
         }
     } else {
-        Copy-Item -LiteralPath $source -Destination $dll
+        [IO.File]::WriteAllBytes($dll, $payload)
     }
     $com = $hklm.CreateSubKey("SOFTWARE\Classes\CLSID\$clsid\InprocServer32")
     try {

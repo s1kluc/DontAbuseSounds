@@ -45,3 +45,18 @@ jobs:
             drivers/windows/capture-probe/CaptureSetup.ps1
             drivers/windows/capture-probe/README.md
           if-no-files-found: error
+      - name: Build Windows EXE with microphone setup
+        working-directory: desktop
+        run: |
+          $env:DAS_CAPTURE_DLL = (Resolve-Path '../drivers/windows/capture-probe/DontAbuseSoundsCaptureProbe.dll').Path
+          rustup update stable --no-self-update
+          cargo +stable test --locked --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable build --locked --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/release/dont-abuse-sounds.exe target/release/DontAbuseSounds-Microphone-Test.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DontAbuseSounds-Microphone-Test-Windows-x64
+          path: desktop/target/release/DontAbuseSounds-Microphone-Test.exe
+          if-no-files-found: error

@@ -26,7 +26,7 @@ impl CaptureFeed {
     pub fn open() -> Result<Self, String> {
         let directory = directory()
             .filter(|path| path.join("installed").is_file())
-            .ok_or("Set up Windows microphone routing with CaptureSetup.ps1 first")?;
+            .ok_or("Set up Windows microphone routing in the app first")?;
         let feed = Self {
             directory,
             playing: None,
