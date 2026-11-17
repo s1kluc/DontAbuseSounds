@@ -38,14 +38,19 @@ jobs:
             desktop/target/release/dont-abuse-sounds.exe
             dist/unsigned-windows-driver/
           if-no-files-found: error
-      - name: Verify production driver and build Windows installer
+      - name: Verify production driver and sign Windows installer
         if: github.ref_type == 'tag'
         env:
           DRIVER_URL: ${{ vars.DAS_WINDOWS_DRIVER_URL }}
           DRIVER_SHA256: ${{ vars.DAS_WINDOWS_DRIVER_SHA256 }}
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           if (!$env:DRIVER_URL -or $env:DRIVER_SHA256 -notmatch '^[a-fA-F0-9]{64}$') {
             throw 'Configure DAS_WINDOWS_DRIVER_URL and DAS_WINDOWS_DRIVER_SHA256 for the Microsoft-signed driver ZIP.'
+          }
+          if (!$env:CERTIFICATE_BASE64 -or !$env:CERTIFICATE_PASSWORD) {
+            throw 'Configure WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD for Authenticode signing.'
           }
           $url = [uri]$env:DRIVER_URL
           if (!$url.IsAbsoluteUri -or $url.Scheme -ne 'https') { throw 'Driver URL must use HTTPS' }
@@ -56,7 +61,21 @@ jobs:
             throw 'Signed driver ZIP checksum mismatch'
           }
           Expand-Archive $zip $signed
-          ./drivers/windows/package.ps1 -DriverDir $signed -OutputDir "$pwd/dist/release-windows"
+          $pfx = Join-Path $env:RUNNER_TEMP 'das-signing.pfx'
+          $identities = @()
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            $password = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+            $identities = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password | Where-Object HasPrivateKey)
+            if ($identities.Count -ne 1) { throw 'Expected exactly one signing identity in the PFX.' }
+            Remove-Item Env:CERTIFICATE_BASE64, Env:CERTIFICATE_PASSWORD
+            ./drivers/windows/package.ps1 -DriverDir $signed -OutputDir "$pwd/dist/release-windows" -CertificateThumbprint $identities[0].Thumbprint
+          } finally {
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+            foreach ($identity in $identities) {
+              Remove-Item "Cert:\CurrentUser\My\$($identity.Thumbprint)" -ErrorAction SilentlyContinue
+            }
+          }
       - uses: actions/upload-artifact@v4
         if: github.ref_type == 'tag'
         with:
