@@ -13,9 +13,12 @@ struct __declspec(uuid("7B1C8C67-ED98-4672-87C4-A501CB3B08C1")) DontAbuseSoundsC
 
 namespace {
 
+#pragma warning(push)
+#pragma warning(disable : 4815) // CRegAPOProperties provides trailing storage for the interface ID.
 const CRegAPOProperties<1> properties(
     __uuidof(DontAbuseSoundsCaptureProbe), L"DontAbuseSounds Capture Probe",
     L"DontAbuseSounds contributors", 1, 0, __uuidof(IAudioProcessingObject));
+#pragma warning(pop)
 
 LONG live_objects = 0;
 
@@ -67,6 +70,9 @@ public:
         if (FAILED(result)) return result;
         UNCOMPRESSEDAUDIOFORMAT format{};
         if (FAILED(in[0]->pFormat->GetUncompressedAudioFormat(&format)) ||
+            format.dwBytesPerSampleContainer != sizeof(float) ||
+            format.dwValidBitsPerSample != 32 ||
+            format.dwSamplesPerFrame == 0 ||
             !(format.fFramesPerSecond >= 8000.0f && format.fFramesPerSecond <= 192000.0f)) {
             CBaseAudioProcessingObject::UnlockForProcess();
             return APOERR_INVALID_CONNECTION_FORMAT;
@@ -140,7 +146,7 @@ private:
 
 } // namespace
 
-extern "C" __declspec(dllexport) HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** out) {
+STDAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** out) {
     if (!out) return E_POINTER;
     *out = nullptr;
     if (clsid != __uuidof(DontAbuseSoundsCaptureProbe)) return CLASS_E_CLASSNOTAVAILABLE;
@@ -151,6 +157,6 @@ extern "C" __declspec(dllexport) HRESULT WINAPI DllGetClassObject(REFCLSID clsid
     return result;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI DllCanUnloadNow() {
+STDAPI DllCanUnloadNow() {
     return InterlockedCompareExchange(&live_objects, 0, 0) == 0 ? S_OK : S_FALSE;
 }
