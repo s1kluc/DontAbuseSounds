@@ -1,0 +1,33 @@
+name: Windows capture probe
+on:
+  push:
+    paths:
+      - 'drivers/windows/capture-probe/**'
+      - '.github/workflows/capture-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          sdk: 10.0.26100.0
+      - name: Build and test capture effect without installing it
+        working-directory: drivers/windows/capture-probe
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 test.cpp /Fetone-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tone-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cl /nologo /std:c++17 /EHsc /W4 /MD /LD probe.cpp /FeDontAbuseSoundsCaptureProbe.dll AudioBaseProcessingObjectV140.lib audiomediatypecrt.lib AudioEng.lib ole32.lib uuid.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cl /nologo /std:c++17 /EHsc /W4 host_test.cpp /Fehost-test.exe ole32.lib uuid.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./host-test.exe
+          exit $LASTEXITCODE
