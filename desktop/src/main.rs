@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod audio;
+#[cfg(windows)]
+mod capture_feed;
 mod clip;
 mod project;
 
@@ -11,10 +13,47 @@ use tauri::{Manager, State};
 
 struct Desktop {
     project: Project,
-    engine: Option<Engine>,
+    engine: Option<Route>,
     generation: u64,
     pad_revisions: [u64; PADS],
 }
+enum Route {
+    Device(Engine),
+    #[cfg(windows)]
+    Capture(capture_feed::CaptureFeed),
+}
+
+impl Route {
+    fn open(input: Option<&str>, output: &str) -> Result<Self, String> {
+        #[cfg(windows)]
+        if output == capture_feed::ID {
+            return capture_feed::CaptureFeed::open().map(Self::Capture);
+        }
+        Engine::open(input, output).map(Self::Device)
+    }
+    fn rate(&self) -> u32 {
+        match self {
+            Self::Device(engine) => engine.rate,
+            #[cfg(windows)]
+            Self::Capture(_) => capture_feed::RATE,
+        }
+    }
+    fn status(&self) -> Option<u16> {
+        match self {
+            Self::Device(engine) => engine.status(),
+            #[cfg(windows)]
+            Self::Capture(feed) => feed.status(),
+        }
+    }
+    fn send(&mut self, cmd: PadCommand) -> Result<(), String> {
+        match self {
+            Self::Device(engine) => engine.send(cmd),
+            #[cfg(windows)]
+            Self::Capture(feed) => feed.send(cmd),
+        }
+    }
+}
+
 type App<'a> = State<'a, Mutex<Desktop>>;
 
 #[derive(Serialize)]
@@ -34,7 +73,14 @@ fn settings(app: App<'_>) -> Startup {
 
 #[tauri::command]
 fn devices(input: bool) -> Result<Vec<audio::Endpoint>, String> {
-    audio::devices(input)
+    let devices = audio::devices(input)?;
+    #[cfg(windows)]
+    if !input && capture_feed::configured() {
+        let mut devices = devices;
+        devices.push(audio::Endpoint::capture_route());
+        return Ok(devices);
+    }
+    Ok(devices)
 }
 
 #[tauri::command]
@@ -42,7 +88,7 @@ fn start_audio(app: App<'_>, input: Option<String>, output: String) -> Result<()
     let mut app = app.lock().unwrap();
     app.engine.take();
     app.generation += 1;
-    let engine = Engine::open(input.as_deref(), &output)?;
+    let engine = Route::open(input.as_deref(), &output)?;
     if app.project.load_error.is_none() {
         app.project.set_devices(input, output)?;
     }
@@ -60,7 +106,7 @@ fn stop_audio(app: App<'_>) {
 #[tauri::command]
 fn audio_status(app: App<'_>) -> Result<Option<u16>, String> {
     let mut app = app.lock().unwrap();
-    match app.engine.as_ref().map(Engine::status) {
+    match app.engine.as_ref().map(Route::status) {
         Some(None) => {
             app.engine.take();
             app.generation += 1;
@@ -106,7 +152,7 @@ async fn play_pad(app: App<'_>, pad: usize) -> Result<(), String> {
             .ok_or("Select an output and start audio first")?;
         (
             app.project.path(pad)?,
-            engine.rate,
+            engine.rate(),
             app.generation,
             app.pad_revisions[pad],
         )
@@ -117,12 +163,12 @@ async fn play_pad(app: App<'_>, pad: usize) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())??;
-    let app = app.lock().unwrap();
+    let mut app = app.lock().unwrap();
     if generation != app.generation || revision != app.pad_revisions[pad] {
         return Err("Playback was cancelled".into());
     }
     app.engine
-        .as_ref()
+        .as_mut()
         .ok_or("Audio is stopped")?
         .send(PadCommand::Play(pad, samples))
 }
@@ -138,7 +184,7 @@ fn stop_pad(app: App<'_>, pad: Option<usize>) -> Result<(), String> {
     } else {
         app.generation += 1;
     }
-    if let Some(engine) = app.engine.as_ref() {
+    if let Some(engine) = app.engine.as_mut() {
         engine.send(pad.map_or(PadCommand::StopAll, PadCommand::Stop))?;
     }
     Ok(())

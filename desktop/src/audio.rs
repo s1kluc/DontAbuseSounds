@@ -22,6 +22,17 @@ pub struct Endpoint {
     name: String,
     virtual_mic: bool,
 }
+#[cfg(windows)]
+impl Endpoint {
+    pub fn capture_route() -> Self {
+        Self {
+            id: crate::capture_feed::ID.into(),
+            name: "Windows microphone (installed capture effect)".into(),
+            virtual_mic: false,
+        }
+    }
+}
+
 pub fn devices(input: bool) -> Result<Vec<Endpoint>, String> {
     let host = cpal::default_host();
     let enumerate = || -> Result<Vec<Device>, cpal::DevicesError> {

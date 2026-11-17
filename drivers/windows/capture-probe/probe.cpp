@@ -8,6 +8,7 @@
 #include <new>
 
 #include "probe_tone.h"
+#include "clip_feed.h"
 
 struct __declspec(uuid("7B1C8C67-ED98-4672-87C4-A501CB3B08C1")) DontAbuseSoundsCaptureProbe;
 
@@ -28,6 +29,7 @@ public:
         InterlockedIncrement(&live_objects);
     }
     ~CaptureProbe() override {
+        feed_.close();
         InterlockedDecrement(&live_objects);
     }
 
@@ -78,8 +80,14 @@ public:
             return APOERR_INVALID_CONNECTION_FORMAT;
         }
         channels_ = GetSamplesPerFrame();
-        tone_.arm(format.fFramesPerSecond);
+        feeding_ = feed_.open(format.fFramesPerSecond);
+        if (!feeding_) tone_.arm(format.fFramesPerSecond);
         return S_OK;
+    }
+    STDMETHODIMP UnlockForProcess() override {
+        const auto result = CBaseAudioProcessingObject::UnlockForProcess();
+        if (SUCCEEDED(result)) { feed_.close(); feeding_ = false; }
+        return result;
     }
     STDMETHODIMP Reset() override { tone_.clear(); return S_OK; }
 
@@ -93,7 +101,10 @@ public:
         if (input.u32BufferFlags != BUFFER_VALID && input.u32BufferFlags != BUFFER_SILENT) return;
         const float* mic = input.u32BufferFlags == BUFFER_VALID
             ? reinterpret_cast<const float*>(input.pBuffer) : nullptr;
-        if (tone_.mix(mic, reinterpret_cast<float*>(output.pBuffer),
+        if (feeding_) {
+            feed_.mix(mic, reinterpret_cast<float*>(output.pBuffer), input.u32ValidFrameCount, channels_);
+            output.u32BufferFlags = BUFFER_VALID;
+        } else if (tone_.mix(mic, reinterpret_cast<float*>(output.pBuffer),
                       input.u32ValidFrameCount, channels_)) {
             output.u32BufferFlags = BUFFER_VALID;
         }
@@ -103,6 +114,8 @@ private:
     LONG refs_ = 1;
     UINT32 channels_ = 0;
     ProbeTone tone_;
+    ClipFeed feed_;
+    bool feeding_ = false;
 };
 
 class Factory final : public IClassFactory {

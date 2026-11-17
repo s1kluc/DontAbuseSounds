@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'drivers/windows/capture-probe/**'
+      - 'desktop/**'
       - '.github/workflows/capture-probe.yml'
   workflow_dispatch:
 
@@ -25,11 +26,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tone-test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cl /nologo /std:c++17 /EHsc /W4 /MD /LD probe.cpp /FeDontAbuseSoundsCaptureProbe.dll AudioBaseProcessingObjectV140.lib audiomediatypecrt.lib AudioEng.lib ole32.lib uuid.lib /link /EXPORT:DllGetClassObject /EXPORT:DllCanUnloadNow
+          cl /nologo /std:c++17 /EHsc /W4 /MD /LD probe.cpp clip_feed.cpp /FeDontAbuseSoundsCaptureProbe.dll AudioBaseProcessingObjectV140.lib audiomediatypecrt.lib AudioEng.lib ole32.lib shell32.lib uuid.lib /link /EXPORT:DllGetClassObject /EXPORT:DllCanUnloadNow
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cl /nologo /std:c++17 /EHsc /W4 host_test.cpp /Fehost-test.exe audiomediatypecrt.lib ole32.lib uuid.lib
+          cl /nologo /std:c++17 /EHsc /W4 host_test.cpp /Fehost-test.exe audiomediatypecrt.lib ole32.lib shell32.lib uuid.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./host-test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./host-test.exe clip
           exit $LASTEXITCODE
       - name: Check read-only device enumeration
         working-directory: drivers/windows/capture-probe

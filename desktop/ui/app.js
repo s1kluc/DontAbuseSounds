@@ -5,6 +5,7 @@ const { open } = window.__TAURI__.dialog;
 const $ = (id) => document.getElementById(id);
 const input = $("input");
 const output = $("output");
+const captureId = "das:windows-capture";
 const start = $("start");
 const error = $("error");
 let project;
@@ -61,7 +62,7 @@ function render() {
   start.textContent = running ? "Stop audio" : "Start audio";
   start.disabled = switching || (!running && !output.value);
   $("stop").disabled = !running;
-  input.disabled = switching || running;
+  input.disabled = switching || running || output.value === captureId;
   output.disabled = switching || running;
   $("refresh").disabled = switching || running;
   $("import").disabled = readOnly || importing || running || !project || project.pads.some(Boolean);
@@ -96,7 +97,7 @@ async function scan(initial = false) {
     }
   }
   $("guide").hidden = !outputs.some(dev => dev.virtual_mic);
-  if ($("guide").hidden) {
+  if ($("guide").hidden && !outputs.some(dev => dev.id === captureId)) {
     $("status").textContent = "Virtual microphone unavailable. Run the DontAbuseSounds installer to add it.";
   }
   render();
@@ -127,9 +128,11 @@ start.onclick = async () => {
       playing = null;
       $("status").textContent = "Audio stopped.";
     } else {
-      await invoke("start_audio", { input: input.value || null, output: output.value });
+      await invoke("start_audio", { input: output.value === captureId ? null : input.value || null, output: output.value });
       playing = 0;
-      $("status").textContent = input.value ? "Microphone and pads are routed to the selected output." : "Pads are routed to the selected output.";
+      $("status").textContent = output.value === captureId
+        ? "Clips are sent to the installed capture effect. Keep the hardware microphone selected in Discord."
+        : input.value ? "Microphone and pads are routed to the selected output." : "Pads are routed to the selected output.";
     }
   } catch (e) { showError(e); }
   finally { switching = false; render(); }

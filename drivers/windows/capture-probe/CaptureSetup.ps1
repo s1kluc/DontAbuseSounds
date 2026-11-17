@@ -1,4 +1,4 @@
-param([ValidateSet('List', 'Install', 'Remove')][string]$Action = 'List')
+param([ValidateSet('List', 'Install', 'Remove')][string]$Action = 'List', [switch]$TestTone)
 
 $ErrorActionPreference = 'Stop'
 if (![Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell.' }
@@ -6,10 +6,13 @@ $clsid = '{7B1C8C67-ED98-4672-87C4-A501CB3B08C1}'
 $root = 'SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture'
 $idProperty = '{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7'
 $multiProperty = '{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},15'
+$legacyProperties = @('{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},1', '{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2')
 $modeProperty = '{d3993a3f-99c2-4402-b5ec-a92a0367664b},7'
 $disableProperty = '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5'
+$reservedProperties = @($idProperty, $multiProperty, $modeProperty) + $legacyProperties
 $modes = [string[]]@('{C18E2F7E-933D-4965-B7D1-1EEF228D2AF3}', '{98951333-B9CD-48B1-A0A3-FF40682D73F7}')
 $hklm = [Microsoft.Win32.Registry]::LocalMachine
+$feed = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'DontAbuseSounds Capture Feed'
 
 $devices = @(
     foreach ($dev in Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction SilentlyContinue) {
@@ -19,7 +22,7 @@ $devices = @(
         try {
             $state = if (!$key) { 'No effects store' }
                 elseif ($key.GetValue($idProperty) -eq $clsid) { 'DontAbuseSounds test attached' }
-                elseif (($key.GetValueNames() | Where-Object { $_ -in $idProperty, $multiProperty, $modeProperty })) { 'Existing endpoint effect' }
+                elseif (($key.GetValueNames() | Where-Object { $_ -in $reservedProperties })) { 'Existing endpoint effect' }
                 elseif ($key.GetValue($disableProperty, 0) -ne 0) { 'Audio enhancements disabled' }
                 else { 'Candidate' }
             [pscustomobject]@{ Name = $dev.FriendlyName; State = $state; Path = $path }
@@ -56,13 +59,32 @@ try {
         if (($key.GetValue($modeProperty) -join ',') -eq ($modes -join ',')) {
             $key.DeleteValue($modeProperty)
         }
+        if ((Test-Path -LiteralPath $feed) -and
+            !((Get-Item -LiteralPath $feed).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            $marker = Join-Path $feed 'installed'
+            if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
+        }
         Write-Host 'Test effect detached. Reboot Windows before testing again.'
         return
     }
 
     # Never replace an existing effect or toggle Windows enhancements for the user.
-    if (($key.GetValueNames() | Where-Object { $_ -in $idProperty, $multiProperty, $modeProperty }) -or
+    if (($key.GetValueNames() | Where-Object { $_ -in $reservedProperties }) -or
         $key.GetValue($disableProperty, 0) -ne 0) { throw "Selected endpoint is unavailable for this test: $($device.State)." }
+
+    $capture = $hklm.OpenSubKey($root)
+    try {
+        foreach ($endpoint in $capture.GetSubKeyNames()) {
+            $effects = $capture.OpenSubKey("$endpoint\FxProperties")
+            if ($effects) {
+                try {
+                    if ($effects.GetValue($idProperty) -eq $clsid) {
+                        throw 'Detach the existing DontAbuseSounds capture effect first.'
+                    }
+                } finally { $effects.Dispose() }
+            }
+        }
+    } finally { $capture.Dispose() }
 
     $source = Join-Path $PSScriptRoot 'DontAbuseSoundsCaptureProbe.dll'
     if (!(Test-Path -LiteralPath $source -PathType Leaf)) { throw 'Extract the whole test ZIP first.' }
@@ -98,8 +120,36 @@ try {
         $apo.SetValue('MaxInstances', -1, 'DWord')
     } finally { $apo.Dispose() }
 
+    if (!$TestTone) {
+        if (Test-Path -LiteralPath $feed) {
+            throw 'The capture feed directory already exists. Remove the old test feed before reinstalling.'
+        }
+        $null = New-Item -ItemType Directory -Path $feed
+        $acl = Get-Acl -LiteralPath $feed
+        $acl.SetAccessRuleProtection($true, $false)
+        $admins = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+        $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+        $audio = [Security.Principal.SecurityIdentifier]::new('S-1-5-19')
+        $acl.SetOwner($admins)
+        foreach ($sid in $admins, $system) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ObjectInherit,ContainerInherit', 'None', 'Allow'))
+        }
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($audio, 'ReadAndExecute', 'ObjectInherit', 'None', 'Allow'))
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity.User, 'ReadAndExecute,CreateFiles', 'Allow'))
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity.User, 'Modify', 'ObjectInherit', 'InheritOnly', 'Allow'))
+        Set-Acl -LiteralPath $feed -AclObject $acl
+    } elseif (Test-Path -LiteralPath $feed) {
+        throw 'Remove the old test feed before installing in test tone mode.'
+    }
+
     $key.SetValue($modeProperty, $modes, 'MultiString')
-    try { $key.SetValue($idProperty, $clsid, 'String') }
-    catch { $key.DeleteValue($modeProperty, $false); throw }
+    try {
+        $key.SetValue($idProperty, $clsid, 'String')
+        if (!$TestTone) { $null = New-Item -ItemType File -Path (Join-Path $feed 'installed') }
+    } catch {
+        if ($key.GetValue($idProperty) -eq $clsid) { $key.DeleteValue($idProperty) }
+        $key.DeleteValue($modeProperty, $false)
+        throw
+    }
     Write-Host "Test effect attached to $($device.Name). Reboot Windows and open Discord's mic test."
 } finally { $key.Dispose() }
