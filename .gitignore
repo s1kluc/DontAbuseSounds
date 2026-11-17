@@ -3,3 +3,6 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+/desktop/target/
+/desktop/gen/

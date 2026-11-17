@@ -5,73 +5,152 @@ on:
     branches: ['**']
     tags: ['v*']
   pull_request:
+
 permissions:
   contents: read
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(startsWith(github.ref, 'refs/tags/v') && '["windows-latest", "macos-15"]' || '["windows-latest", "ubuntu-22.04", "macos-15"]') }}
-    runs-on: ${{ matrix.os }}
+  windows:
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.13'
-      - name: Linux runtime libraries
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2 libsndfile1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0
-      - run: python -m pip install -e ".[build]"
-      - run: python -m unittest discover -s tests -v
-      - name: Import Windows signing certificate when configured
-        if: runner.os == 'Windows' && github.event_name != 'pull_request'
-        shell: pwsh
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          node-version: '24'
+      - uses: microsoft/setup-msbuild@v2
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Test and build Windows app
+        working-directory: desktop
         run: |
-          if (-not $env:CERTIFICATE_BASE64) {
-            Write-Warning 'No signing certificate configured. Building an unsigned Windows test package.'
-            exit 0
+          rustup update stable --no-self-update
+          cargo +stable test --locked
+          cargo +stable build --locked --release
+      - name: Build Windows driver for submission
+        run: ./drivers/windows/build.ps1 -OutputDir "$pwd/dist/unsigned-windows-driver"
+      - name: Upload Windows app and unsigned driver for development
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-development
+          path: |
+            desktop/target/release/dont-abuse-sounds.exe
+            dist/unsigned-windows-driver/
+          if-no-files-found: error
+      - name: Verify production driver and build Windows installer
+        if: github.ref_type == 'tag'
+        env:
+          DRIVER_URL: ${{ vars.DAS_WINDOWS_DRIVER_URL }}
+          DRIVER_SHA256: ${{ vars.DAS_WINDOWS_DRIVER_SHA256 }}
+        run: |
+          if (!$env:DRIVER_URL -or $env:DRIVER_SHA256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw 'Configure DAS_WINDOWS_DRIVER_URL and DAS_WINDOWS_DRIVER_SHA256 for the Microsoft-signed driver ZIP.'
           }
-          $pfx = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
-          try {
-            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
-            $password = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
-            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
-            $signer = @($cert | Where-Object HasPrivateKey)
-            if ($signer.Count -ne 1) { throw 'Expected exactly one signing certificate with a private key.' }
-            "WINDOWS_CERTIFICATE_THUMBPRINT=$($signer[0].Thumbprint)" >> $env:GITHUB_ENV
-          } finally {
-            Remove-Item $pfx -ErrorAction SilentlyContinue
+          $url = [uri]$env:DRIVER_URL
+          if (!$url.IsAbsoluteUri -or $url.Scheme -ne 'https') { throw 'Driver URL must use HTTPS' }
+          $zip = Join-Path $env:RUNNER_TEMP 'signed-das-driver.zip'
+          $signed = Join-Path $env:RUNNER_TEMP 'signed-das-driver'
+          Invoke-WebRequest $url -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:DRIVER_SHA256) {
+            throw 'Signed driver ZIP checksum mismatch'
           }
-      - run: python scripts/build.py
+          Expand-Archive $zip $signed
+          ./drivers/windows/package.ps1 -DriverDir $signed -OutputDir "$pwd/dist/release-windows"
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: release-windows
+          path: dist/release-windows/*.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test macOS app
+        working-directory: desktop
+        run: |
+          rustup update stable --no-self-update
+          rustup target add --toolchain stable aarch64-apple-darwin x86_64-apple-darwin
+          cargo +stable test --locked
+      - name: Load Apple signing certificates
+        if: github.ref_type == 'tag'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.APPLE_INSTALLER_IDENTITY }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_CERTIFICATE:?Missing Apple Developer ID certificate export}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing certificate password}"
+          : "${APPLE_SIGNING_IDENTITY:?Missing Developer ID Application identity}"
+          : "${APPLE_INSTALLER_IDENTITY:?Missing Developer ID Installer identity}"
+          keychain="$RUNNER_TEMP/das.keychain-db"
+          p12="$RUNNER_TEMP/das.p12"
+          trap 'rm -f "$p12"' EXIT
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo "APPLE_INSTALLER_IDENTITY=$APPLE_INSTALLER_IDENTITY" >> "$GITHUB_ENV"
+      - name: Build macOS app and installer
+        working-directory: desktop
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          mkdir -p ../dist
+          npx --yes @tauri-apps/cli@2.12.5 build --target universal-apple-darwin --bundles app -- --locked
+          bash ../drivers/macos/package.sh "$PWD/target/universal-apple-darwin/release/bundle/macos/DontAbuseSounds.app" "$PWD/../dist/DontAbuseSounds-macOS-universal.dmg"
+      - name: Notarize macOS disk image
+        if: github.ref_type == 'tag'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_ID:?Missing Apple ID}"
+          : "${APPLE_PASSWORD:?Missing notarization app password}"
+          : "${APPLE_TEAM_ID:?Missing Apple team ID}"
+          dmg=dist/DontAbuseSounds-macOS-universal.dmg
+          codesign --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
       - uses: actions/upload-artifact@v4
         with:
-          name: VirtualMixer-${{ runner.os }}-${{ runner.arch }}
-          path: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/*.dmg
+          name: ${{ github.ref_type == 'tag' && 'release-macos' || 'macOS-development' }}
+          path: dist/*.dmg
           if-no-files-found: error
+
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: VirtualMixer-*
+          pattern: release-*
           merge-multiple: true
           path: dist
-      - name: Publish Windows and macOS release
+      - name: Publish both installers
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.dmg \
-            --target "$GITHUB_SHA" --title "Virtual Mixer $GITHUB_REF_NAME" \
-            --notes "Windows: extract the entire ZIP and run VirtualMixer/VirtualMixer.exe; keep the _internal folder beside it. macOS: open the DMG and drag VirtualMixer.app to Applications. The architecture is included in each filename. Python is not required. macOS builds are not Developer ID signed or notarized; Gatekeeper may block opening until allowed in System Settings > Privacy & Security. Windows packages are signed only when a signing certificate is configured. Virtual audio routing requires a separately installed driver such as BlackHole on macOS or VB-CABLE on Windows. Audio routing on real hardware has not been verified."
+          gh release create "$GITHUB_REF_NAME" dist/DontAbuseSounds-Windows-x64-setup.exe dist/DontAbuseSounds-macOS-universal.dmg \
+            --verify-tag --title "DontAbuseSounds $GITHUB_REF_NAME" \
+            --notes "Install DontAbuseSounds with the provided setup file. Restart macOS after installation. In DontAbuseSounds select your hardware microphone and the virtual output, then start audio. In Discord select DontAbuseSounds Mic as Input Device. The app must be running to mix your voice and clips."

@@ -1,161 +1,35 @@
-# Virtual Mixer
+# DontAbuseSounds
 
-Native Qt desktop soundboard with a shared PortAudio core: CoreAudio on macOS,
-Windows audio hosts, and ALSA/PulseAudio on Linux. macOS is the initial target.
-
-## Run
-
-Install Python 3.11–3.14, then:
-
-```sh
-cd /Users/lucaslipis/.codex/virtual-mixer
-python3.13 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/virtual-mixer
-```
-
-Alternatively use `uv venv --python 3.13` and `uv pip install -e .`.
-Windows uses `.venv\Scripts\virtual-mixer.exe`. Linux needs the distribution's
-PortAudio runtime, for example `libportaudio2`. Python 3.15 is not supported yet.
-
-Select an output, assign audio to a pad, and click to play or stop. Pads play
-simultaneously; Stop all silences all voices. Audio is converted to the device's
-sample rate and channel count. WAV, FLAC, AIFF, OGG and MP3 availability depends on
-libsndfile codecs. Imports are copied into app data and limited to five minutes,
-mono/stereo, and 30 million samples. Decode happens on the UI thread; use short
-clips. Simultaneous loud sounds may clip. Input selection is a saved reference;
-microphone capture, monitoring, hotkeys and MIDI are future work.
-
-Qt AppDataLocation stores project.json and sounds, normally
-`~/Library/Application Support/VirtualMixer/VirtualMixer` on macOS. Saves replace
-JSON atomically. A corrupt project disables saving to preserve the original.
-Run one instance per project folder. Device IDs use platform, host and name;
-identically named devices use enumeration order and may be ambiguous after reordering.
-Virtual detection is a name hint. Custom virtual and Multi-Output devices can be selected.
-No output is automatically selected; losing or changing the output stops playback.
-Device scans run every 2.5 seconds. No deliberate fallback to system speakers occurs.
+Desktop soundboard with twelve pads, a microphone mix, and its own virtual audio device. The Tauri app and mixer are written in Rust. The Windows driver and macOS HAL plug-in are installed alongside the app.
 
 ## Setup
 
-The app includes platform instructions and does not install drivers.
+1. On Windows 11 x64, run the setup EXE as an administrator. On macOS 12 or later, open the universal DMG, run the installer package, and restart so CoreAudio loads the plug-in.
+2. Open DontAbuseSounds, choose your **hardware microphone**, then select **DontAbuseSounds Feed** on Windows or **DontAbuseSounds Mic** on macOS as the soundboard output. Click **Start audio**.
+3. In Discord's Voice & Video settings, choose **DontAbuseSounds Mic** as the input and your usual headphones as the output. Keep DontAbuseSounds running during the call.
+4. Assign WAV, MP3, FLAC, AIFF, or Ogg/Vorbis files to the pads. Click a pad to play or stop it. **Stop all sounds** stops the pads while keeping your microphone active.
 
-- macOS: install [BlackHole](https://existential.audio/blackhole/). Select it as
-  output here and as microphone/input in Discord/calls or Audio Input Capture in OBS.
-  For monitoring, create a Multi-Output Device with headphones and BlackHole in
-  Audio MIDI Setup, with drift correction on the secondary device.
-- Windows: install [VB-CABLE](https://vb-audio.com/Cable/), output to CABLE Input,
-  receive from CABLE Output.
-- Linux: with PulseAudio or PipeWire's PulseAudio compatibility, run
-  `pactl load-module module-null-sink sink_name=virtual_mixer sink_properties=device.description=VirtualMixer`.
-  Output to VirtualMixer and use pavucontrol to capture its monitor in the receiver.
-  This sink is temporary; configure the audio service for persistence.
+For local playback, turn the microphone off in the soundboard and choose your headphones or speakers as the soundboard output. If Discord suppresses clips during a call, check its microphone noise suppression and input sensitivity settings.
 
-## Checks
+Use **Import project** before assigning sounds to migrate a legacy Virtual Mixer `project.json`. Keep the old `sounds` folder next to it. The import copies the clips into the new app's data directory, and the audio devices are selected again in the new app.
+
+## Building and testing
+
+Install stable Rust and Node.js 24. From `desktop/`:
 
 ```sh
-python3 -m unittest discover -s tests -v
+cargo test --locked
+npx --yes @tauri-apps/cli@2.12.5 dev
 ```
 
-Tests simulate device enumeration for CoreAudio/WASAPI/ALSA, stable IDs across
-index changes, disconnect cleanup, settings restoration and unsafe-path rejection.
+The **Desktop builds** workflow produces Windows development artifacts (the EXE and WDK driver files for signing) and a macOS development DMG. The macOS development package uses local ad hoc code signatures. These artifacts are for development and device testing.
 
-Before releasing on **each** platform, manually:
+The Windows driver is based on Microsoft's [SimpleAudioSample](https://github.com/microsoft/Windows-driver-samples/tree/main/audio/simpleaudiosample) (MS-PL). The macOS plug-in is based on Apple's [NullAudio sample](https://developer.apple.com/documentation/coreaudio/creating-an-audio-server-driver-plug-in). Their license texts are under `drivers/`.
 
-1. Import mono/stereo clips at differing sample rates, restart and verify saved pads.
-2. Receive pad audio in OBS/Discord through the virtual input; verify stop and Stop all.
-3. Play simultaneous pads; switch outputs during playback and verify old output silence.
-4. Disconnect the selected device, verify unavailable status and silence, reconnect,
-   reselect and replay. Verify no speaker fallback.
-5. Try unsupported audio, missing assets, missing virtual devices and corrupt JSON.
+Before publishing, verify on clean Windows 11 x64 and macOS systems that the installer registers the device and Discord can record voice alone, a clip alone and both together. Check that Stop all leaves voice working and that stopping audio or unplugging the microphone stops the route. Include an upgrade and uninstall on Windows and both Mac architectures in the release check. On macOS the plug-in can be removed from `/Library/Audio/Plug-Ins/HAL/DontAbuseSoundsMic.driver` by an administrator, followed by a restart.
 
-Hardware reception, macOS GUI execution and Windows/Linux parity have not been
-verified in this environment. Windows signing requires the certificate setup below.
-The source is an MVP implementation, not a hardware-certified release.
+## Publishing
 
-API references: [sounddevice](https://python-sounddevice.readthedocs.io/),
-[Qt for Python](https://doc.qt.io/qtforpython-6/).
-
-## Windows and Linux executables
-
-The supplied photo is used for the window icon, Windows/macOS executable icon, and Linux
-application menu icon. Its aspect ratio is preserved with transparent padding.
-
-Build **on the target operating system**, using Python 3.13:
-
-```sh
-python -m pip install -e ".[build]"
-python scripts/build.py
-```
-
-On Ubuntu, first install `libportaudio2 libsndfile1 libegl1 libxkbcommon-x11-0
-libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0` using apt.
-The build includes Python, Qt and audio modules:
-
-- Windows: `dist/VirtualMixer/VirtualMixer.exe`, plus a ZIP package in `dist/`.
-  Extract the entire ZIP and keep the `_internal` folder beside the executable.
-- Linux: `dist/VirtualMixer`, plus a tar.gz package in `dist/`. After extraction,
-  run `./VirtualMixer`; optionally run `./install-desktop.sh` to install the app and
-  photo icon into your user application menu. Linux ELF executables do not embed a
-  file-manager icon in the same way as Windows EXE files.
-
-The packaged app does not require Python on the recipient's computer. It still
-needs a working graphical desktop/audio service and an installed virtual audio device.
-Linux builds made on Ubuntu 22.04 target that release or newer compatible systems;
-this does not imply support for every Linux distribution. Architecture follows the
-build host; the included CI configuration targets x86-64.
-
-`.github/workflows/build.yml` builds all three systems on pushes, pull requests, or manual triggers, and retains packages as GitHub Actions artifacts. Copy this
-project into a GitHub repository first. Pushing a `v*` tag publishes the Windows
-ZIP and macOS ZIP/DMG as a GitHub release after both builds pass. Branch
-builds continue to check all three platforms.
-
-These build recipes have not yet produced or validated native Windows/Linux/macOS binaries.
-No such binaries are included in this source folder. Test audio reception on each
-OS using the checklist above before distribution. Windows packages are unsigned
-unless signing is configured below.
-
-### Windows signing
-
-SoXR replaces SciPy for sample-rate conversion, removing the SciPy import that
-loaded the blocked `_pocketfft_umath` module in issue #1. Other native modules
-can still be blocked by Windows application control when unsigned or untrusted.
-
-For local signing, install the Windows SDK and a trusted RSA code-signing
-certificate with its private key in `CurrentUser\My`. Set the environment variable
-`WINDOWS_CERTIFICATE_THUMBPRINT` to its thumbprint before running `scripts/build.py`.
-The build preserves valid vendor signatures and signs remaining EXE, DLL and PYD
-files with SHA-256 and an RFC 3161 timestamp. It verifies every native binary before
-creating the ZIP; signing or verification failures stop the build.
-
-For GitHub Actions, configure repository secrets `WINDOWS_CERTIFICATE_BASE64`
-(base64-encoded PFX containing the certificate and private key) and
-`WINDOWS_CERTIFICATE_PASSWORD`. Use a certificate issued by a trusted CA; a
-self-signed certificate does not establish public trust. PFX import is supported
-only if your certificate provider permits export of the signing key; hardware or
-cloud-backed keys require that provider's signing integration instead.
-Without these secrets, CI explicitly builds an unsigned test package. Pull requests
-never import the certificate. Test with Windows application control enabled;
-signing cannot override an organization's explicit deny policies.
-
-## GitHub builds for DontAbuseSounds
-
-Target repository: https://github.com/s1kluc/DontAbuseSounds
-
-The **Desktop builds** workflow runs on pushes and pull requests, and can also be
-started with **Actions → Desktop builds → Run workflow** after it is on the default
-branch. It builds Windows, Ubuntu 22.04 and macOS 15 using native runners. Download
-completed packages from the workflow run's **Artifacts** section. Push a `v*` tag
-to publish a Windows and macOS release automatically. Each artifact name includes the runner architecture;
-binaries support that architecture, not every CPU type.
-
-macOS produces a ZIP and a DMG containing `VirtualMixer.app` with the supplied photo icon.
-Open the DMG and drag the app to the Applications link to install it. The filename
-includes the build architecture; the app is not a universal Intel/Apple Silicon binary.
-The build verifies the DMG checksum before uploading it.
-The app is unsigned and not notarized; Gatekeeper may block opening it until the
-user allows it in System Settings → Privacy & Security. Windows builds use the
-optional signing configuration above and are otherwise unsigned.
-
-You can also run `python scripts/build.py` locally on macOS after installing the
-`build` extra. Native Windows/Linux/macOS build results still need verification;
-a successful CI build alone does not verify audio routing on real devices.
+- **Windows:** Submit the driver from the matching development workflow to Microsoft for production driver signing. Put the returned `SimpleAudioSample.inf`, `.sys`, and `.cat` at the root of a ZIP. Point repository variables `DAS_WINDOWS_DRIVER_URL` and `DAS_WINDOWS_DRIVER_SHA256` at the HTTPS download and SHA-256 hash. CI validates the ZIP and driver signatures before making the installer.
+- **macOS:** Export the Developer ID Application and Developer ID Installer identities with their private keys together as a password-protected P12. Set secrets `APPLE_CERTIFICATE` (base64 P12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, and `APPLE_PASSWORD` (app-specific password). Set repository variables `APPLE_SIGNING_IDENTITY`, `APPLE_INSTALLER_IDENTITY`, and `APPLE_TEAM_ID`.
+- Push a new `v*` tag on the reviewed Rust commit after configuring signing and testing the installers. GitHub Actions publishes the Windows setup EXE and the notarized universal DMG together after both jobs pass.
