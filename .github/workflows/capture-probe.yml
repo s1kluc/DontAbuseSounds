@@ -31,3 +31,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./host-test.exe
           exit $LASTEXITCODE
+      - name: Check read-only device enumeration
+        working-directory: drivers/windows/capture-probe
+        run: ./CaptureSetup.ps1 -Action List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DontAbuseSounds-Capture-Probe-Windows-x64
+          path: |
+            drivers/windows/capture-probe/DontAbuseSoundsCaptureProbe.dll
+            drivers/windows/capture-probe/CaptureSetup.ps1
+            drivers/windows/capture-probe/README.md
+          if-no-files-found: error
